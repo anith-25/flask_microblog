@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 
 basedir = os.path.abspath(os.path.dirname(__file__))
@@ -16,4 +17,6 @@ class Config(object):
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
     ADMINS = ['your-email@example.com']
     POSTS_PER_PAGE = 3
+    JWT_TOKEN_LOCATION = ["headers", "cookies"]
+    JWT_CSRF_IN_COOKIES = True
     

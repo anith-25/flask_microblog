@@ -10,3 +10,6 @@ pyjwt
 flask-bootstrap
 flask-moment
 elasticsearch
+sqlalchemy-stubs
+flask-httpauth
+Flask-JWT-Extended

@@ -1,23 +1,37 @@
-from app import db, login
-from time import time
-import jwt
-from flask import current_app, url_for
-from hashlib import md5
-from datetime import datetime
-from flask_login import UserMixin
+import base64
 import json
+import os
+
+from datetime import datetime, timedelta
+from hashlib import md5
 from time import time
-from werkzeug.security import generate_password_hash, check_password_hash
+
+import jwt
+
+from flask import current_app, url_for
+from flask_login import UserMixin
+from flask_sqlalchemy.query import Query as SaQuery
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from app import db, login
+
+
+class BaseModel(db.Model):
+    __abstract__ = True
+    query: SaQuery
+
 
 followers = db.Table('followers',
     db.Column('follower_id', db.Integer, db.ForeignKey('user.id')),
     db.Column('followed_id', db.Integer, db.ForeignKey('user.id'))
 )
 
+
 class PaginatedAPIMixin(object):
     @staticmethod
     def to_collection_dict(query, page, per_page, endpoint, **kwargs):
-        resources = query.paginate(page=page, per_page=per_page, error_out=False)
+        resources = query.paginate(page=page, per_page=per_page, 
+        error_out=False)
         data = {
             'items': [item.to_dict() for item in resources.items],
             '_meta': {
@@ -36,7 +50,8 @@ class PaginatedAPIMixin(object):
         }
         return data
 
-class User(PaginatedAPIMixin, UserMixin, db.Model):
+
+class User(PaginatedAPIMixin, UserMixin, BaseModel):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), index=True, unique=True)
     email = db.Column(db.String(120), index=True, unique=True)
@@ -59,7 +74,9 @@ class User(PaginatedAPIMixin, UserMixin, db.Model):
     last_message_read_time = db.Column(db.DateTime)
     notifications = db.relationship('Notification', backref='user',
                                     lazy='dynamic')
-    
+    token = db.Column(db.String(32), index=True, unique=True)
+    token_expiration = db.Column(db.DateTime)
+
     def __repr__(self):
         return '<User {}>'.format(self.username)
     
@@ -96,7 +113,7 @@ class User(PaginatedAPIMixin, UserMixin, db.Model):
             {'reset_password': self.id, 'exp': time() + expires_in},
             current_app.config['SECRET_KEY'], algorithm='HS256'
         )
-
+    
     def new_messages(self):
         last_read_time = self.last_message_read_time or datetime(1900, 1, 1)
         return Message.query.filter_by(recipient=self).filter(
@@ -135,11 +152,30 @@ class User(PaginatedAPIMixin, UserMixin, db.Model):
         if new_user and 'password' in data:
             self.set_password(data['password'])
 
+    def get_token(self, expires_in=3600):
+        now = datetime.utcnow()
+        if self.token and self.token_expiration > now + timedelta(seconds=60):
+            return self.token
+        self.token = base64.b64encode(os.urandom(24)).decode('utf-8')
+        self.token_expiration = now + timedelta(seconds=expires_in)
+        db.session.add(self)
+        return self.token
+
+    def revoke_token(self):
+        self.token_expiration = datetime.utcnow() - timedelta(seconds=1)
+    
+    @staticmethod
+    def check_token(token):
+        user = User.query.filter_by(token=token).first()
+        if user is None or user.token_expiration < datetime.utcnow():
+            return None
+        return user
+
     @staticmethod
     def verify_reset_password_token(token):
         try:
             id = jwt.decode(token, current_app.config['SECRET_KEY'],
-                        algorithms=['HS256'])['reset_password']
+                            algorithms=['HS256'])['reset_password']
         except:
             return
         return User.query.get(id)
@@ -149,7 +185,8 @@ class User(PaginatedAPIMixin, UserMixin, db.Model):
 def load_user(id):
     return User.query.get(int(id))
 
-class Post(db.Model):
+
+class Post(BaseModel):
     id = db.Column(db.Integer, primary_key=True)
     body = db.Column(db.String(140))
     timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
@@ -159,7 +196,7 @@ class Post(db.Model):
         return '<Post {}>'.format(self.body)
 
 
-class Message(db.Model):
+class Message(BaseModel):
     id = db.Column(db.Integer, primary_key=True)
     sender_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'))
@@ -170,7 +207,7 @@ class Message(db.Model):
         return '<Message {}>'.format(self.body)
 
 
-class Notification(db.Model):
+class Notification(BaseModel):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), index=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
